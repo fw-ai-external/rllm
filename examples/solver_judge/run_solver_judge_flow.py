@@ -90,15 +90,15 @@ if __name__ == "__main__":
     n_parallel_tasks = 128
     n_solutions = 2  # Number of solutions to generate per problem
 
-    model_name = "Qwen/Qwen3-0.6B"
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    # model_name = "Qwen/Qwen3-0.6B"
+    # tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     rollout_engine = OpenAIEngine(
-        model=model_name,
-        tokenizer=tokenizer,
-        base_url="http://localhost:30000/v1",
-        api_key="None",
-        sampling_params={"temperature": 0.6, "top_p": 0.95, "max_tokens": 1024},
+        model="gpt-4o",
+        # tokenizer=tokenizer,
+        # base_url="http://localhost:30000/v1",
+        api_key=os.getenv("OPENAI_API_KEY"),
+        # sampling_params={"temperature": 0.6, "top_p": 0.95, "max_tokens": 1024},
     )
 
     engine = AgentWorkflowEngine(
