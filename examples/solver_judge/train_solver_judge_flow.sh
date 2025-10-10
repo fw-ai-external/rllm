@@ -8,14 +8,14 @@ export VLLM_ENGINE_ITERATION_TIMEOUT_S=100000000000
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 python3 -m examples.solver_judge.train_solver_judge_flow \
     data.train_batch_size=16 \
-    +trainer.n_training_gpus_per_node=4 \
+    +trainer.n_training_gpus_per_node=8 \
     data.max_prompt_length=4096 \
     data.max_response_length=4096 \
     actor_rollout_ref.model.lora_rank=32 \
     actor_rollout_ref.model.lora_alpha=32 \
     actor_rollout_ref.rollout.load_format=safetensors \
     actor_rollout_ref.model.target_modules=all-linear \
-    actor_rollout_ref.model.path=Qwen/Qwen3-8B \
+    actor_rollout_ref.model.path=Qwen/Qwen3-235B-A22B-Instruct-2507 \
     actor_rollout_ref.actor.optim.lr=3e-5 \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.actor.loss_agg_mode=seq-mean-token-mean \
@@ -32,7 +32,7 @@ python3 -m examples.solver_judge.train_solver_judge_flow \
     actor_rollout_ref.actor.fsdp_config.param_offload=True \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \
     actor_rollout_ref.actor.ulysses_sequence_parallel_size=1 \
-    actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
+    actor_rollout_ref.rollout.tensor_model_parallel_size=8 \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.mode="async" \
     actor_rollout_ref.rollout.enforce_eager=False \
@@ -66,7 +66,7 @@ python3 -m examples.solver_judge.train_solver_judge_flow \
     trainer.default_hdfs_dir=null \
     trainer.total_epochs=100 \
     rllm.workflow.use_workflow=True \
-    fireworks.deployment_id=test-hot-reload-qwen-8b-2 \
-    fireworks.model_id_prefix=test-qwen-8b-solver-judge
+    fireworks.deployment_id=test-hot-reload-qwen-235b-1 \
+    fireworks.model_id_prefix=test-qwen-235b-solver-judge
 
 pkill -9 -f 'ray::WorkerDict'
