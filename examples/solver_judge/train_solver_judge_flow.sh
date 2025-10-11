@@ -15,7 +15,7 @@ python3 -m examples.solver_judge.train_solver_judge_flow \
     actor_rollout_ref.model.lora_alpha=32 \
     actor_rollout_ref.rollout.load_format=safetensors \
     actor_rollout_ref.model.target_modules=all-linear \
-    actor_rollout_ref.model.path=Qwen/Qwen3-235B-A22B-Instruct-2507 \
+    actor_rollout_ref.model.path=Qwen/Qwen2.5-72B-Instruct \
     actor_rollout_ref.actor.optim.lr=3e-5 \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.actor.loss_agg_mode=seq-mean-token-mean \
@@ -66,7 +66,7 @@ python3 -m examples.solver_judge.train_solver_judge_flow \
     trainer.default_hdfs_dir=null \
     trainer.total_epochs=100 \
     rllm.workflow.use_workflow=True \
-    fireworks.deployment_id=test-hot-reload-qwen-235b-1 \
-    fireworks.model_id_prefix=test-qwen-235b-solver-judge
+    fireworks.deployment_id=test-hot-reload-qwen-72b-1 \
+    fireworks.model_id_prefix=test-qwen-72b-solver-judge
 
 pkill -9 -f 'ray::WorkerDict'
