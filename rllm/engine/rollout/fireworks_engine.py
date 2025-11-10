@@ -54,6 +54,7 @@ class FireworksEngine(OpenAIEngine):
             sampling_params=sampling_params,
             **kwargs,
         )
+        self._base_url = base_url
         self._use_chat_completions = True  # Always True for Fireworks
 
     def update_model_weights(self, fireworks_model_id: str, lora_adapter_path: dict) -> bool:
@@ -168,7 +169,7 @@ class FireworksEngine(OpenAIEngine):
                 await asyncio.sleep(1)
 
     def _fireworks_chat_completion(self, messages, sampling_params):
-        url = urljoin(str(self.client.base_url), "/chat/completions")
+        url = urljoin(self._base_url, "/chat/completions")
         payload = {
             "model": self.model,
             "messages": messages,
