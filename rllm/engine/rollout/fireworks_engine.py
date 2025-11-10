@@ -179,5 +179,6 @@ class FireworksEngine(OpenAIEngine):
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.client.api_key}",
         }
+        print("fireworks_payload", payload)
         response = requests.request("POST", url, headers=headers, data=json.dumps(payload))
         return response.json()
