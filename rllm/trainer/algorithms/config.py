@@ -220,7 +220,7 @@ class RejectionSamplingConfig:
 
 @dataclass
 class RolloutCorrectionConfig:
-    """Configuration for rollout correction (TIS, proximal forward passes).
+    """Configuration for rollout correction (TIS/IcePop, proximal forward passes).
 
     Backend-agnostic — each backend interprets these according to its infrastructure.
 
@@ -231,11 +231,29 @@ class RolloutCorrectionConfig:
               proximal forward pass. When False, compute π_old via policy.forward()
               (3-policy / decoupled PPO).
         tis_cap: Upper clamp on the TIS importance weight.
+        icepop_mode: None = disabled. "token" or "sequence" = IcePop masked
+              mismatch correction: multiply the policy loss by the train/infer
+              ratio rho inside the clip band [icepop_alpha, icepop_beta] and
+              zero it outside. "token" uses the per-token ratio; "sequence"
+              uses one ratio per sequence (the length-normalized geometric
+              mean), applied to every token of that sequence.
+        icepop_alpha: Lower clip bound of the IcePop band. None derives it as
+              ``1 / icepop_beta`` (symmetric band).
+        icepop_beta: Upper clip bound of the IcePop band.
     """
 
     tis_mode: str | None = None
     bypass_mode: bool | None = None
     tis_cap: float = 5.0
+    icepop_mode: str | None = None
+    icepop_alpha: float | None = None
+    icepop_beta: float = 2.0
+
+    @property
+    def icepop_bounds(self) -> tuple[float, float]:
+        """Resolved (lower, upper) IcePop clip band."""
+        low = self.icepop_alpha if self.icepop_alpha is not None else 1.0 / self.icepop_beta
+        return low, self.icepop_beta
 
 
 class rLLMAdvantageEstimator(str, Enum):
@@ -319,6 +337,9 @@ class AlgorithmConfig:
             tis_mode=rc_section.get("tis_mode", None),
             bypass_mode=rc_section.get("bypass_mode", None),
             tis_cap=rc_section.get("tis_cap", 2.0),
+            icepop_mode=rc_section.get("icepop_mode", None),
+            icepop_alpha=rc_section.get("icepop_alpha", None),
+            icepop_beta=rc_section.get("icepop_beta", 2.0),
         )
         return cls(
             estimator=rLLMAdvantageEstimator(algorithm_config.adv_estimator),

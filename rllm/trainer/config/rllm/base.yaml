@@ -90,6 +90,9 @@ algorithm:
     bypass_mode: null     # true = pi_old = pi_rollout, false = pi_old is computed (null = backend default)
     tis_mode: null        # null = disabled, "token" or "sequence" = TIS importance sampling level
     tis_cap: 2.0          # Upper clamp on TIS importance weight
+    icepop_mode: null     # null = disabled, "token" or "sequence" = IcePop masked mismatch correction level
+    icepop_alpha: null    # Lower IcePop clip bound (null = 1 / icepop_beta, symmetric band)
+    icepop_beta: 2.0      # Upper IcePop clip bound; loss is zeroed where the train/infer ratio leaves [alpha, beta]
 
 # Stepwise advantage
 # TODO(listar2000): deprecate the `per_step` mode and refactor this config.

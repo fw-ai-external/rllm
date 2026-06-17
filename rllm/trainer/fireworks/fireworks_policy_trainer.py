@@ -289,6 +289,160 @@ class FireworksPolicyTrainer:
         return [out["logprobs"].data for out in prox_fwd.loss_fn_outputs]
 
     @staticmethod
+    def _compute_icepop_weight(
+        resp_prox: torch.Tensor,
+        resp_inf: torch.Tensor,
+        mode: str,
+        low: float,
+        high: float,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Compute IcePop's hard two-sided mismatch weight.
+
+        rho is the train/infer probability ratio — per token in ``token``
+        mode, or one length-normalized sequence ratio (the geometric mean,
+        broadcast to every token) in ``sequence`` mode. The weight is rho
+        inside ``[low, high]`` and 0 outside, so mismatched tokens (or whole
+        mismatched sequences) drop out of the gradient.
+
+        Returns (weight, rho, keep) tensors shaped like ``resp_prox``.
+        """
+        import torch
+
+        if mode not in ("token", "sequence"):
+            raise ValueError(f"icepop_mode must be null, 'token', or 'sequence', got {mode!r}")
+        if not 0.0 < low < high:
+            raise ValueError(f"IcePop clip band requires 0 < low < high, got low={low}, high={high}")
+
+        log_ratio = torch.clamp(resp_prox - resp_inf, min=-20.0, max=20.0)
+        if mode == "sequence":
+            rho = torch.exp(log_ratio.mean()).expand_as(log_ratio)
+        else:
+            rho = torch.exp(log_ratio)
+
+        keep = (rho >= low) & (rho <= high)
+        return torch.where(keep, rho, torch.zeros_like(rho)), rho, keep
+
+    @classmethod
+    def _build_icepop_builtin_loss_datums(
+        cls,
+        data: list[tinker.Datum],
+        advantages: list[float],
+        prox_logprobs: list[list[float]],
+        inf_logprobs: list[list[float]],
+        prompt_lens: list[int],
+        icepop_mode: str,
+        icepop_low: float,
+        icepop_high: float,
+        policy_loss: str = "rl_loss",
+    ) -> tuple[list[tinker.Datum], dict[str, float]]:
+        """Build server-side loss datums with IcePop folded into advantages.
+
+        The builtin kernel sees prox logprobs as its sampling logprobs (its
+        own ratio is then current/prox) while the IcePop weight — prox/infer
+        clipped to the band — premultiplies each token's advantage.
+        """
+        import torch
+        from training.utils.rl.common import _get_loss_mask, validate_inference_logprobs_for_sample
+
+        result: list[tinker.Datum] = []
+        metric_weights: list[torch.Tensor] = []
+        metric_rhos: list[torch.Tensor] = []
+        metric_keeps: list[torch.Tensor] = []
+
+        for i, datum in enumerate(data):
+            target_data = datum.loss_fn_inputs["target_tokens"]
+            target_tokens = list(target_data.data)
+            n_tokens = len(target_tokens)
+            response_start = max(0, prompt_lens[i] - 1)
+            prox_lp = list(prox_logprobs[i])
+            inf_lp = list(inf_logprobs[i]) if i < len(inf_logprobs) else []
+
+            resp_len = max(0, n_tokens - response_start)
+            loss_mask = _get_loss_mask(
+                datum,
+                response_start,
+                resp_len,
+                dtype=torch.float32,
+                device=torch.device("cpu"),
+            )
+            active_count = int((loss_mask > 0.5).sum().item())
+
+            if resp_len > 0 and active_count > 0:
+                validate_inference_logprobs_for_sample(policy_loss, i, inf_lp, response_start + resp_len)
+                resp_prox = torch.tensor(prox_lp[response_start : response_start + resp_len], dtype=torch.float32)
+                resp_inf = torch.tensor(inf_lp[response_start : response_start + resp_len], dtype=torch.float32)
+                icepop_weight, rho, keep = cls._compute_icepop_weight(
+                    resp_prox,
+                    resp_inf,
+                    icepop_mode,
+                    icepop_low,
+                    icepop_high,
+                )
+
+                active = loss_mask > 0.5
+                metric_weights.append(icepop_weight[active])
+                metric_rhos.append(rho[active])
+                metric_keeps.append(keep[active])
+            else:
+                icepop_weight = torch.ones(resp_len, dtype=torch.float32)
+
+            per_token_adv = [0.0] * response_start
+            adv_val = advantages[i] if i < len(advantages) else 0.0
+            for r in range(resp_len):
+                per_token_adv.append(float(adv_val * icepop_weight[r].item() * loss_mask[r].item()))
+
+            if len(prox_lp) >= n_tokens:
+                slp_padded = prox_lp[:n_tokens]
+            else:
+                slp_padded = prox_lp + [0.0] * (n_tokens - len(prox_lp))
+
+            result.append(
+                tinker.Datum(
+                    model_input=datum.model_input,
+                    loss_fn_inputs={
+                        "target_tokens": tinker.TensorData(
+                            data=target_tokens,
+                            dtype="int64",
+                            shape=[n_tokens],
+                        ),
+                        "logprobs": tinker.TensorData(
+                            data=slp_padded,
+                            dtype="float32",
+                            shape=[n_tokens],
+                        ),
+                        "advantages": tinker.TensorData(
+                            data=per_token_adv,
+                            dtype="float32",
+                            shape=[n_tokens],
+                        ),
+                    },
+                )
+            )
+
+        metrics: dict[str, float] = {}
+        if metric_weights:
+            weights = torch.cat(metric_weights)
+            rhos = torch.cat(metric_rhos)
+            keeps = torch.cat(metric_keeps)
+            metrics.update(
+                {
+                    "rollout_correction/icepop/active_tokens": float(weights.numel()),
+                    "rollout_correction/icepop/weight/mean": weights.mean().item(),
+                    "rollout_correction/icepop/weight/min": weights.min().item(),
+                    "rollout_correction/icepop/weight/max": weights.max().item(),
+                    "rollout_correction/icepop/zero_frac": (~keeps).float().mean().item(),
+                    "rollout_correction/icepop/low_frac": (rhos < icepop_low).float().mean().item(),
+                    "rollout_correction/icepop/high_frac": (rhos > icepop_high).float().mean().item(),
+                }
+            )
+            if icepop_mode == "sequence":
+                metrics["rollout_correction/icepop/seq_ratio/mean"] = rhos.mean().item()
+                metrics["rollout_correction/icepop/seq_ratio/min"] = rhos.min().item()
+                metrics["rollout_correction/icepop/seq_ratio/max"] = rhos.max().item()
+
+        return result, metrics
+
+    @staticmethod
     def _compute_rollout_entropy_metrics(datums: list[tinker.Datum]) -> dict[str, float]:
         total_logprob = 0.0
         total_tokens = 0
@@ -471,16 +625,31 @@ class FireworksPolicyTrainer:
         adv_metrics["time/proximal_forward"] = time.perf_counter() - t0
 
         # Build datums for the builtin kernel.
-        tis_config = TISConfig(level=rc.tis_mode or "token", cap=rc.tis_cap) if rc.tis_mode else None
-        builtin_datums = build_builtin_loss_datums(
-            clean_datums,
-            advantages,
-            prox_logprobs,
-            inf_logprobs,
-            prompt_lens,
-            tis_config=tis_config,
-            policy_loss=algorithm_config.loss_fn or "grpo",
-        )
+        if rc.icepop_mode:
+            icepop_low, icepop_high = rc.icepop_bounds
+            builtin_datums, icepop_metrics = self._build_icepop_builtin_loss_datums(
+                clean_datums,
+                advantages,
+                prox_logprobs,
+                inf_logprobs,
+                prompt_lens,
+                icepop_mode=rc.icepop_mode,
+                icepop_low=icepop_low,
+                icepop_high=icepop_high,
+                policy_loss=algorithm_config.loss_fn or "grpo",
+            )
+            adv_metrics.update(icepop_metrics)
+        else:
+            tis_config = TISConfig(level=rc.tis_mode or "token", cap=rc.tis_cap) if rc.tis_mode else None
+            builtin_datums = build_builtin_loss_datums(
+                clean_datums,
+                advantages,
+                prox_logprobs,
+                inf_logprobs,
+                prompt_lens,
+                tis_config=tis_config,
+                policy_loss=algorithm_config.loss_fn or "grpo",
+            )
 
         kernel_loss, kernel_config = self._builtin_loss
         fwd_bwd_result = await asyncio.to_thread(

@@ -257,6 +257,9 @@ class FireworksBackend(TinkerBackend):
         rc = alg.get("rollout_correction", {})
         tis_mode = rc.get("tis_mode", None)
         bypass_mode = rc.get("bypass_mode", True)
+        icepop_mode = rc.get("icepop_mode", None)
+        icepop_alpha = rc.get("icepop_alpha", None)
+        icepop_beta = rc.get("icepop_beta", 2.0)
 
         # eps_clip_high only meaningful for dapo/cispo (asymmetric clipping)
         if eps_clip_high is not None and loss_fn not in ("dapo", "cispo"):
@@ -282,6 +285,23 @@ class FireworksBackend(TinkerBackend):
             logger.warning(
                 "rollout_correction.tis_mode='%s' with bypass_mode=true; TIS weight will be 1.0 (no correction). Set bypass_mode=false for active TIS.",
                 tis_mode,
+            )
+
+        # rollout_correction.icepop_* validation
+        if icepop_mode is not None and icepop_mode not in ("token", "sequence"):
+            raise ValueError(f"rollout_correction.icepop_mode must be null, 'token', or 'sequence', got '{icepop_mode}'")
+        if icepop_beta <= 1.0:
+            raise ValueError(f"rollout_correction.icepop_beta must be > 1.0 (band must contain rho=1), got {icepop_beta}")
+        if icepop_alpha is not None and not (0.0 < icepop_alpha <= 1.0):
+            raise ValueError(f"rollout_correction.icepop_alpha must be in (0, 1] (band must contain rho=1), got {icepop_alpha}")
+        if tis_mode is not None and icepop_mode is not None:
+            raise ValueError("Set only one of rollout_correction.tis_mode or rollout_correction.icepop_mode")
+
+        # IcePop with bypass is a no-op (rho = prox/inf = 1.0 everywhere)
+        if icepop_mode is not None and bypass_mode:
+            logger.warning(
+                "rollout_correction.icepop_mode='%s' with bypass_mode=true; IcePop weight will be 1.0 (no correction). Set bypass_mode=false for active IcePop.",
+                icepop_mode,
             )
 
         # save_freq must be a multiple of sync interval (save requires a sampler snapshot from sync)
